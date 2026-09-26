@@ -84,11 +84,15 @@ async def replay_window(board_id: str,
                         coalesce: bool = Query(default=False),
                         limit: int = Query(default=2000, ge=1, le=5000),
                         user: Dict[str, Any] = Depends(auth.current_user)):
-    """回放初始化/跳转: 最近快照 + 到 rev 的操作页。"""
+    """回放初始化/跳转: 最近快照 + 到 rev 的操作页。
+
+    边界约定: 「rev R 时刻的状态」= ≤R 的最近快照 + (快照rev, R] 的操作,
+    与装载/导出走同一条边界 —— rev 就是要折叠到的目标, 不做偏移。
+    """
     await board_ctx(board_id, user, "viewer")
     hist = history_service.for_board(board_id)
     doc = await manager.get_doc(board_id)
-    target = max(0, (doc.head_rev if rev is None else rev) - 1)
+    target = doc.head_rev if rev is None else min(doc.head_rev, max(0, rev))
     loop = asyncio.get_running_loop()
     window = await loop.run_in_executor(
         None, lambda: hist.replay_window(target, coalesce=coalesce, page_limit=limit))

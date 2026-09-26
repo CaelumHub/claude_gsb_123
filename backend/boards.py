@@ -153,7 +153,9 @@ class BoardManager:
                 doc.import_state(snapshot)
             base_rev = doc.head_rev
             max_rev = base_rev
-            for raw in hist.iter_ops(from_rev=base_rev + 1):
+            # 边界约定: 快照覆盖到 base_rev(含), 其后操作从 base_rev+1 开始,
+            # iter_ops 为 (from_rev, to_rev] 左开区间, 故传 from_rev=base_rev
+            for raw in hist.iter_ops(from_rev=base_rev):
                 clean = validate_op(raw)
                 if clean:
                     doc.apply_op(clean)
@@ -223,7 +225,9 @@ class BoardManager:
                 accepted.append(clean)
             if accepted:
                 hist = history_service.for_board(board_id)
-                stamped = [op for op in accepted if "rev" in op and op.get("type") != "move"]
+                # move 与其他操作一样落盘(回放/导出/重启重建都依赖日志完整);
+                # dup 是幂等重发的回执, 原操作已在日志中, 不重复追加
+                stamped = [op for op in accepted if "rev" in op and not op.get("dup")]
                 await asyncio.get_running_loop().run_in_executor(
                     None, hist.append_ops, stamped)
                 meta = self.metas.get(board_id)

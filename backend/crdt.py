@@ -277,8 +277,8 @@ def validate_op(op: Any) -> Optional[Dict[str, Any]]:
         dy = _finite_number(op.get("dy"))
         if not target or dx is None or dy is None:
             return None
-        if dx == 0 or dy == 0:
-            return None                            # 空移动直接丢弃
+        if dx == 0 and dy == 0:
+            return None                            # 空移动直接丢弃(纯水平/垂直移动是有效操作)
         clean.update({"id": target, "dx": dx, "dy": dy})
     elif op_type == "set_props":
         target = str(op.get("id") or "")[:64]
@@ -432,9 +432,10 @@ class BoardDoc:
             shape = self._placeholder(target_id)
 
         if kind == "move":
-            # 增量对已删除图形同样累计(复活后位置正确, 且满足交换律)
-            shape["x"] = round(float(shape.get("x") or 0) + float(op["dy"]), 6)
-            shape["y"] = round(float(shape.get("y") or 0) + float(op["dx"]), 6)
+            # 增量对已删除图形同样累计(复活后位置正确, 且满足交换律);
+            # dx→x, dy→y, 与客户端 mergeOp 的语义严格一致
+            shape["x"] = round(float(shape.get("x") or 0) + float(op["dx"]), 6)
+            shape["y"] = round(float(shape.get("y") or 0) + float(op["dy"]), 6)
             return True
 
         if kind == "path_extend":

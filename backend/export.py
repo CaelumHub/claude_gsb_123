@@ -291,8 +291,9 @@ async def export_board(board_id: str,
     name = (meta.get("name") or board_id).replace("/", "_")
 
     if rev is not None:
+        # 边界约定与装载/回放一致: rev R 的内容 = ≤R 快照 + (快照rev, R] 操作
         folded = await asyncio.get_running_loop().run_in_executor(
-            None, hist.fold_window, max(0, rev - 1))
+            None, hist.fold_window, max(0, rev))
         shapes = folded["shapes"]
     else:
         doc = await manager.get_doc(board_id)
@@ -322,13 +323,10 @@ async def export_board(board_id: str,
                          "application/json; charset=utf-8")
 
     if format == "ops":
-        shard_metas = hist.shards_index()
-        total = sum(m.get("count") or 0 for m in shard_metas
-                    if (m.get("last_rev") or 0) <= (rev if rev is not None else (1 << 60)))
+        # 边界与 iter_ops 约定一致: (0, rev] —— 不再用分片计数二次截断,
+        # 避免跨分片尾部的操作被丢掉(导出内容早于所选版本)
         lines = [json.dumps(op, ensure_ascii=False)
                  for op in hist.iter_ops(from_rev=0, to_rev=rev)]
-        if total:
-            lines = lines[:total]
         return _download(f"{name}-ops.ndjson", "\n".join(lines) + "\n",
                          "application/x-ndjson; charset=utf-8")
 
