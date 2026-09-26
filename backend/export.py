@@ -288,14 +288,15 @@ async def export_board(board_id: str,
                        user: Dict[str, Any] = Depends(auth.current_user)):
     meta, _role = await board_ctx(board_id, user, "viewer")
     hist = history_service.for_board(board_id)
+    doc = await manager.get_doc(board_id)
     name = (meta.get("name") or board_id).replace("/", "_")
+    target_rev = None if rev is None else max(0, min(doc.head_rev, int(rev)))
 
-    if rev is not None:
+    if target_rev is not None:
         folded = await asyncio.get_running_loop().run_in_executor(
-            None, hist.fold_window, max(0, rev - 1))
+            None, hist.fold_window, target_rev)
         shapes = folded["shapes"]
     else:
-        doc = await manager.get_doc(board_id)
         shapes = doc.visible_shapes()
 
     if format == "svg":
@@ -306,7 +307,6 @@ async def export_board(board_id: str,
         return _download(f"{name}.svg", body, "image/svg+xml; charset=utf-8")
 
     if format == "json":
-        doc = manager.docs.get(board_id)
         payload = {
             "format": "coboard-export",
             "version": 1,
@@ -314,7 +314,7 @@ async def export_board(board_id: str,
             "exported_by": user.get("username"),
             "board": {k: meta.get(k) for k in
                       ("id", "name", "mode", "owner", "tags", "created_at", "updated_at")},
-            "rev": rev if rev is not None else (doc.head_rev if doc else None),
+            "rev": target_rev if target_rev is not None else doc.head_rev,
             "shapes": shapes,
         }
         return _download(f"{name}.json",
@@ -322,13 +322,8 @@ async def export_board(board_id: str,
                          "application/json; charset=utf-8")
 
     if format == "ops":
-        shard_metas = hist.shards_index()
-        total = sum(m.get("count") or 0 for m in shard_metas
-                    if (m.get("last_rev") or 0) <= (rev if rev is not None else (1 << 60)))
-        lines = [json.dumps(op, ensure_ascii=False)
-                 for op in hist.iter_ops(from_rev=0, to_rev=rev)]
-        if total:
-            lines = lines[:total]
+        ops = hist.iter_ops(from_rev=0, to_rev=target_rev)
+        lines = [json.dumps(op, ensure_ascii=False) for op in ops]
         return _download(f"{name}-ops.ndjson", "\n".join(lines) + "\n",
                          "application/x-ndjson; charset=utf-8")
 

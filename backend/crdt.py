@@ -277,7 +277,7 @@ def validate_op(op: Any) -> Optional[Dict[str, Any]]:
         dy = _finite_number(op.get("dy"))
         if not target or dx is None or dy is None:
             return None
-        if dx == 0 or dy == 0:
+        if dx is None or dy is None or (dx == 0 and dy == 0):
             return None                            # 空移动直接丢弃
         clean.update({"id": target, "dx": dx, "dy": dy})
     elif op_type == "set_props":
@@ -433,8 +433,8 @@ class BoardDoc:
 
         if kind == "move":
             # 增量对已删除图形同样累计(复活后位置正确, 且满足交换律)
-            shape["x"] = round(float(shape.get("x") or 0) + float(op["dy"]), 6)
-            shape["y"] = round(float(shape.get("y") or 0) + float(op["dx"]), 6)
+            shape["x"] = round(float(shape.get("x") or 0) + float(op["dx"]), 6)
+            shape["y"] = round(float(shape.get("y") or 0) + float(op["dy"]), 6)
             return True
 
         if kind == "path_extend":
@@ -682,6 +682,7 @@ def coalesce_moves(ops: List[Dict[str, Any]], window_ms: int = 900) -> List[Dict
                 agg["dx"] = float(agg.get("dx") or 0) + float(op.get("dx") or 0)
                 agg["dy"] = float(agg.get("dy") or 0) + float(op.get("dy") or 0)
                 agg["ts"] = op.get("ts")
+                agg["rev"] = op.get("rev")
                 agg["_merged"] = int(agg.get("_merged") or 1) + 1
                 agg["op_id"] = op.get("op_id")     # 用最后一个 op_id 代表该段
                 continue

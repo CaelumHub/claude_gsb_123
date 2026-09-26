@@ -1,8 +1,9 @@
 """历史回放 REST 路由。
 
 回放策略(快速回放):
-- /replay?rev=R 返回「≤R 的最近快照 + 快照之后到 R 的操作」, 播放器
-  以快照为底、顺序折叠操作即可到达任意时刻, 无需从零重放。
+- /replay?rev=R 返回「≤R 的最近快照 + (snapshot.rev, R] 的操作」,
+  即应用完 rev=R 后的状态。播放器以完整快照(含墓碑)为底, 顺序折叠
+  后续操作即可到达任意时刻, 无需从零重放。
 - coalesce=true 用于拖动进度条/高倍速: 合并同站点同图形时间窗内的
   连续 move 增量, 长拖拽一步到位。
 - /ops 分页拉取供播放器向后流式加载与「操作列表」面板展示。
@@ -22,16 +23,11 @@ from .models import CompactReq
 
 router = APIRouter(prefix="/api/boards", tags=["history"])
 
-_INDEX_VIEW_CACHE: Dict[str, Dict[str, Any]] = {}
-
 
 @router.get("/{board_id}/history/index")
 async def history_index(board_id: str,
                         user: Dict[str, Any] = Depends(auth.current_user)):
     await board_ctx(board_id, user, "viewer")
-    cached = _INDEX_VIEW_CACHE.get(board_id)
-    if cached is not None:
-        return cached
     hist = history_service.for_board(board_id)
     doc = await manager.get_doc(board_id)
     loop = asyncio.get_running_loop()
@@ -45,7 +41,6 @@ async def history_index(board_id: str,
         "stats": await loop.run_in_executor(None, hist.op_stats),
         "storage": await loop.run_in_executor(None, hist.storage_stats),
     }
-    _INDEX_VIEW_CACHE[board_id] = response
     return response
 
 
@@ -88,7 +83,7 @@ async def replay_window(board_id: str,
     await board_ctx(board_id, user, "viewer")
     hist = history_service.for_board(board_id)
     doc = await manager.get_doc(board_id)
-    target = max(0, (doc.head_rev if rev is None else rev) - 1)
+    target = None if rev is None else max(0, min(doc.head_rev, rev))
     loop = asyncio.get_running_loop()
     window = await loop.run_in_executor(
         None, lambda: hist.replay_window(target, coalesce=coalesce, page_limit=limit))
@@ -101,7 +96,8 @@ async def replay_window(board_id: str,
         "base_rev": window.get("base_rev") or 0,
         "snapshot": {
             "rev": snapshot.get("rev"),
-            "shapes": [s for s in snapshot_shapes.values() if not s.get("deleted")],
+            # 快照是完整 CRDT 状态: 连墓碑也交给前端，后续 restore 才能还原图形类型。
+            "shapes": list(snapshot_shapes.values()),
         } if snapshot else None,
         "ops": window.get("ops") or [],
         "coalesced": bool(coalesce),

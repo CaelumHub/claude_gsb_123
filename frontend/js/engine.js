@@ -189,7 +189,8 @@ export class BoardEngine {
   }
 
   rebuildIndex() {
-    this.gridIndex.rebuild([...this.shapes.values()].filter((s) => !s.deleted));
+    this.gridIndex.rebuild([...this.shapes.values()]
+      .filter((s) => !s.deleted && s.kind !== 'ghost'));
   }
 
   /** 远端/本地操作合并后调用: 增量刷新受影响图形索引 */

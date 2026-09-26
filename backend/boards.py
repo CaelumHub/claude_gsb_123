@@ -153,7 +153,7 @@ class BoardManager:
                 doc.import_state(snapshot)
             base_rev = doc.head_rev
             max_rev = base_rev
-            for raw in hist.iter_ops(from_rev=base_rev + 1):
+            for raw in hist.iter_ops(from_rev=base_rev):
                 clean = validate_op(raw)
                 if clean:
                     doc.apply_op(clean)
@@ -223,7 +223,7 @@ class BoardManager:
                 accepted.append(clean)
             if accepted:
                 hist = history_service.for_board(board_id)
-                stamped = [op for op in accepted if "rev" in op and op.get("type") != "move"]
+                stamped = [op for op in accepted if "rev" in op and not op.get("dup")]
                 await asyncio.get_running_loop().run_in_executor(
                     None, hist.append_ops, stamped)
                 meta = self.metas.get(board_id)
@@ -238,21 +238,23 @@ class BoardManager:
 
     async def maybe_snapshot(self, board_id: str) -> Optional[int]:
         """达到阈值(操作数或时间)时保存快照。返回快照 rev 或 None。"""
-        doc = self.docs.get(board_id)
-        if doc is None or not self.pending_snapshot.get(board_id):
-            return None
-        settings = config.get_settings()
-        ops_gap = doc.head_rev - doc.last_snapshot_rev
-        time_gap = (now_ms() - (doc.last_op_ts or now_ms())) / 1000.0
-        enough_ops = ops_gap >= int(settings.get("snapshot_interval_ops") or 200)
-        enough_time = ops_gap >= 20 and doc.last_op_ts and \
-            (time.time() - self.last_touch.get(board_id, time.time())) > 5 and \
-            ops_gap > 0 and self._snapshot_timer_due(board_id, int(settings.get("snapshot_interval_secs") or 600))
-        if not (enough_ops or enough_time):
-            return None
-        self.pending_snapshot[board_id] = False
-        hist = history_service.for_board(board_id)
-        state = doc.export_state()              # 循环线程内导出, 写盘进线程池
+        async with self.lock_for(board_id):
+            doc = self.docs.get(board_id)
+            if doc is None or not self.pending_snapshot.get(board_id):
+                return None
+            settings = config.get_settings()
+            ops_gap = doc.head_rev - doc.last_snapshot_rev
+            time_gap = (now_ms() - (doc.last_op_ts or now_ms())) / 1000.0
+            enough_ops = ops_gap >= int(settings.get("snapshot_interval_ops") or 200)
+            enough_time = ops_gap >= 20 and doc.last_op_ts and \
+                (time.time() - self.last_touch.get(board_id, time.time())) > 5 and \
+                ops_gap > 0 and self._snapshot_timer_due(board_id, int(settings.get("snapshot_interval_secs") or 600))
+            if not (enough_ops or enough_time):
+                return None
+            self.pending_snapshot[board_id] = False
+            hist = history_service.for_board(board_id)
+            # 在操作锁内冻结状态，保证快照内容、文件名 rev 和后续日志起点一致。
+            state = doc.export_state()
         rev = await asyncio.get_running_loop().run_in_executor(
             None, hist.save_snapshot, doc, state)
         await self.save_meta(board_id)
@@ -268,9 +270,10 @@ class BoardManager:
         return False
 
     async def force_snapshot(self, board_id: str) -> int:
-        doc = await self.get_doc(board_id)
-        hist = history_service.for_board(board_id)
-        state = doc.export_state()
+        async with self.lock_for(board_id):
+            doc = await self.get_doc(board_id)
+            hist = history_service.for_board(board_id)
+            state = doc.export_state()
         rev = await asyncio.get_running_loop().run_in_executor(
             None, hist.save_snapshot, doc, state)
         await self.save_meta(board_id)
